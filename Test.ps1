@@ -1,5 +1,11 @@
-$OSBuildPath = "Registry::HKEY_LOCAL_MACHINE\$HiveName\Microsoft\Windows NT\CurrentVersion"
+$user = Get-ADUser "<SERVICE_ACCOUNT>"
+$dc = (Get-ADDomainController -Discover).HostName
 
-$OSBuild = Get-ItemPropertyValue `
-    -Path $OSBuildPath `
-    -Name 'CurrentBuild'
+Get-ADReplicationAttributeMetadata `
+    -Object $user.DistinguishedName `
+    -Server $dc |
+Sort-Object LastOriginatingChangeTime -Descending |
+Select-Object -First 15 AttributeName,
+    LastOriginatingChangeTime,
+    LastOriginatingChangeDirectoryServerIdentity,
+    Version
