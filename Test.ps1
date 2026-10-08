@@ -1,7 +1,2 @@
-Get-AppxPackage -AllUsers Microsoft.MicrosoftEdge.Stable |
-    Select-Object PackageFullName, PackageUserInformation
-
-Get-AppxPackage Microsoft.MicrosoftEdge.Stable |
-    Remove-AppxPackage
-
-& "C:\Windows\System32\Sysprep\Sysprep.exe" /generalize /oobe /shutdown
+$dc = [System.DirectoryServices.DirectoryEntry]::new("LDAP://dc01.example.com/RootDSE", $null, $null, [System.DirectoryServices.AuthenticationTypes]::Anonymous)
+$dc.Properties["currentTime"][0]
