@@ -1,4 +1,6 @@
-$socket = New-Object System.Net.Sockets.Socket -ArgumentList @('InterNetwork','Stream','Tcp')
-$socket.Connect("example.com",389)
-$socket.Connected
-$socket.Close()
+$domain = "example.com"
+$dc = [System.DirectoryServices.ActiveDirectory.Domain]::GetDomain(
+    (New-Object System.DirectoryServices.ActiveDirectory.DirectoryContext("Domain", $domain))
+).FindDomainController().Name
+
+$dc
