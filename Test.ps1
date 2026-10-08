@@ -1,2 +1,4 @@
-$root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://example.com/RootDSE", $null, $null, [System.DirectoryServices.AuthenticationTypes]::Anonymous)
-$root.Properties["currentTime"][0]
+$socket = New-Object System.Net.Sockets.Socket -ArgumentList @('InterNetwork','Stream','Tcp')
+$socket.Connect("example.com",389)
+$socket.Connected
+$socket.Close()
