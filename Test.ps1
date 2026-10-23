@@ -1,26 +1,13 @@
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
+1..10 | ForEach-Object {
+    $h = [WinFocus]::GetForegroundWindow()
+    [uint32]$p = 0
+    [void][WinFocus]::GetWindowThreadProcessId($h, [ref]$p)
 
-public class WinFocus
-{
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
+    [PSCustomObject]@{
+        Handle  = $h.ToInt64()
+        PID     = $p
+        Process = (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName
+    }
 
-    [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(
-        IntPtr hWnd, out uint processId);
-}
-'@
-
-$hwnd = [WinFocus]::GetForegroundWindow()
-[uint32]$processId = 0
-
-[void][WinFocus]::GetWindowThreadProcessId(
-    $hwnd, [ref]$processId)
-
-[PSCustomObject]@{
-    Handle  = $hwnd.ToInt64()
-    PID     = $processId
-    Process = (Get-Process -Id $processId).ProcessName
+    Start-Sleep -Seconds 1
 }
