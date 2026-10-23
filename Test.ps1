@@ -1,46 +1,26 @@
 Add-Type @'
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
 
-public class WindowFinder
+public class WinFocus
 {
-    public delegate bool EnumCallback(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
-    public static extern bool EnumWindows(EnumCallback callback, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
-
-    [DllImport("user32.dll")]
-    public static extern bool IsWindowVisible(IntPtr hWnd);
+    public static extern uint GetWindowThreadProcessId(
+        IntPtr hWnd, out uint processId);
 }
 '@
 
-$pidTS = (Get-Process TSBackground).Id
+$hwnd = [WinFocus]::GetForegroundWindow()
+[uint32]$processId = 0
 
-$callback = [WindowFinder+EnumCallback]{
-    param($hWnd, $lParam)
+[void][WinFocus]::GetWindowThreadProcessId(
+    $hwnd, [ref]$processId)
 
-    [uint32]$windowPid = 0
-    [void][WindowFinder]::GetWindowThreadProcessId($hWnd, [ref]$windowPid)
-
-    if ($windowPid -eq $pidTS) {
-        $title = New-Object System.Text.StringBuilder 256
-        [void][WindowFinder]::GetWindowText($hWnd, $title, 256)
-
-        [PSCustomObject]@{
-            Handle  = $hWnd.ToInt64()
-            Title   = $title.ToString()
-            Visible = [WindowFinder]::IsWindowVisible($hWnd)
-        } | Format-List
-    }
-
-    return $true
+[PSCustomObject]@{
+    Handle  = $hwnd.ToInt64()
+    PID     = $processId
+    Process = (Get-Process -Id $processId).ProcessName
 }
-
-[void][WindowFinder]::EnumWindows($callback, [IntPtr]::Zero)
