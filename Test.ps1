@@ -1,1 +1,1 @@
-$creds = Get-Credential -Message "Please authenticate to $Domain. Device time: $(Get-Date -Format 'yyyy-MM-dd HH:mm'). If incorrect, check the BIOS clock."
+$creds = Get-Credential -Message "Please authenticate to $Domain`r`n`r`nDevice time: $(Get-Date -Format 'MM/dd/yyyy hh:mm tt')`r`nIf incorrect, correct the BIOS date/time."
