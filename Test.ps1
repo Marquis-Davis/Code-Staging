@@ -1,1 +1,5 @@
-$creds = Get-Credential -Message "Please authenticate to $Domain`r`n`r`nDevice time: $(Get-Date -Format 'MM/dd/yyyy hh:mm tt')`r`nIf incorrect, correct the BIOS date/time."
+1..15 | ForEach-Object {
+    Get-Process TSBackground -ErrorAction SilentlyContinue |
+        Select-Object Id, MainWindowHandle, MainWindowTitle
+    Start-Sleep -Seconds 1
+}
