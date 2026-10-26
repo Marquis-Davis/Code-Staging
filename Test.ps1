@@ -1,139 +1,179 @@
 
 # Monthly OS Image QA Report
-# Run after the QA task sequence completes.
-# No command-line parameters or user input required.
+# Run after OSD completes. No parameters or prompts.
 
-$reportFolder = 'C:\Temp'
-$serviceNowUrl = ''  # Add your ServiceNow URL once.
+$folder = 'C:\Temp'
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
 
-New-Item -Path $reportFolder -ItemType Directory -Force | Out-Null
+$file = Join-Path $folder ("OSImageQA_{0}_{1}.txt" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd_HHmmss'))
+$report = [System.Collections.Generic.List[string]]::new()
 
-$computer = $env:COMPUTERNAME
-$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$reportPath = Join-Path $reportFolder "OSImageValidation_${computer}_${timestamp}.html"
-$checks = @()
+# To add a check later, use: Add-Line 'Check Name' $value
+function Add-Line($name, $value) {
+    $script:report.Add(('{0,-19}: {1}' -f $name, $value))
+}
 
-# Windows details
+$report.Add('MONTHLY OS IMAGE QA REPORT')
+$report.Add('========================================')
+
+Add-Line 'Computer' $env:COMPUTERNAME
+Add-Line 'Report Date' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+
+# Windows and monthly patches
 $os = Get-CimInstance Win32_OperatingSystem
-$windows = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-$release = [string]$windows.DisplayVersion
-$build = '{0}.{1}' -f $windows.CurrentBuild, $windows.UBR
+$win = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 
-$checks += [pscustomobject]@{
-    Check = 'Windows OS'; Expected = 'Windows 11'; Actual = $os.Caption
-    Result = $(if ($os.Caption -match 'Windows 11') { 'PASS' } else { 'FAIL' })
-}
-$checks += [pscustomobject]@{
-    Check = 'Windows edition'; Expected = 'Enterprise'; Actual = $windows.EditionID
-    Result = $(if ($windows.EditionID -match '^Enterprise') { 'PASS' } else { 'FAIL' })
-}
-$checks += [pscustomobject]@{
-    Check = 'Windows release'; Expected = 'Recorded for QA'; Actual = $release; Result = 'INFO'
-}
-$checks += [pscustomobject]@{
-    Check = 'OS build + UBR'; Expected = 'Recorded for QA'; Actual = $build; Result = 'INFO'
-}
+Add-Line 'Windows OS' $os.Caption
+Add-Line 'Windows Release' $win.DisplayVersion
+Add-Line 'Windows Build' ("{0}.{1}" -f $win.CurrentBuild, $win.UBR)
+Add-Line 'Last Boot' $os.LastBootUpTime
 
-# Recent hotfixes, informational only
 try {
     $kbs = @(Get-HotFix -ErrorAction Stop |
         Sort-Object InstalledOn -Descending |
         Select-Object -First 5 -ExpandProperty HotFixID)
-    $kbList = if ($kbs.Count) { $kbs -join ', ' } else { 'No hotfixes returned' }
+
+    Add-Line 'Recent KBs' $(if ($kbs.Count) { $kbs -join ', ' } else { 'None returned' })
 } catch {
-    $kbList = 'Unable to retrieve hotfixes'
-}
-$checks += [pscustomobject]@{
-    Check = 'Recent hotfixes'; Expected = 'Reference only'; Actual = $kbList; Result = 'INFO'
+    Add-Line 'Recent KBs' 'Unable to query'
 }
 
 # ConfigMgr client
-$ccm = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
+$ccm = Get-Service CcmExec -ErrorAction SilentlyContinue
 $ccmStatus = if ($ccm) { [string]$ccm.Status } else { 'Not installed' }
-$checks += [pscustomobject]@{
-    Check = 'ConfigMgr client'; Expected = 'Running'; Actual = $ccmStatus
-    Result = $(if ($ccmStatus -eq 'Running') { 'PASS' } else { 'FAIL' })
+
+Add-Line 'ConfigMgr Client' $ccmStatus
+
+try {
+    $ccmVersion = (Get-CimInstance -Namespace root\ccm -ClassName SMS_Client -ErrorAction Stop).ClientVersion
+    Add-Line 'ConfigMgr Version' $ccmVersion
+} catch {
+    Add-Line 'ConfigMgr Version' 'Unavailable'
 }
 
 # Pending servicing reboot
-$rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
-                 (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
-$checks += [pscustomobject]@{
-    Check = 'Pending servicing reboot'; Expected = 'No'; Actual = $(if ($rebootPending) { 'Yes' } else { 'No' })
-    Result = $(if ($rebootPending) { 'FAIL' } else { 'PASS' })
+$reboot = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+          (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+
+Add-Line 'Pending Reboot' $(if ($reboot) { 'Yes' } else { 'No' })
+
+# Local Administrators group
+$report.Add('----------------------------------------')
+$report.Add('LOCAL ADMINISTRATORS')
+
+try {
+    $members = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop)
+
+    foreach ($member in $members) {
+        $status = 'N/A (group or external account)'
+
+        if ($member.ObjectClass -eq 'User' -and $member.PrincipalSource -eq 'Local') {
+            try {
+                $user = Get-LocalUser -SID $member.SID -ErrorAction Stop
+                $status = if ($user.Enabled) { 'Enabled' } else { 'Disabled' }
+            } catch {
+                $status = 'Unknown'
+            }
+        }
+
+        Add-Line 'Admin Member' ("{0} [{1}]" -f $member.Name, $status)
+    }
+
+    if (-not $members.Count) {
+        Add-Line 'Admin Member' 'None found'
+    }
+} catch {
+    Add-Line 'Admin Member' 'Unable to query'
 }
 
-# Component store health
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($isAdmin) {
+# Firewall profiles
+$report.Add('----------------------------------------')
+$report.Add('FIREWALL PROFILES')
+
+try {
+    foreach ($profile in (Get-NetFirewallProfile -ErrorAction Stop)) {
+        Add-Line $profile.Name ("Enabled={0}; Inbound={1}; Outbound={2}" -f `
+            $profile.Enabled, $profile.DefaultInboundAction, $profile.DefaultOutboundAction)
+    }
+} catch {
+    Add-Line 'Firewall' 'Unable to query'
+}
+
+# Microsoft Defender
+$report.Add('----------------------------------------')
+$report.Add('MICROSOFT DEFENDER')
+
+try {
+    $defender = Get-MpComputerStatus -ErrorAction Stop
+
+    Add-Line 'Running Mode' $defender.AMRunningMode
+    Add-Line 'Product Version' $defender.AMProductVersion
+    Add-Line 'Engine Version' $defender.AMEngineVersion
+    Add-Line 'Signature Version' $defender.AntivirusSignatureVersion
+    Add-Line 'Signature Updated' $defender.AntivirusSignatureLastUpdated
+    Add-Line 'Antivirus Enabled' $defender.AntivirusEnabled
+    Add-Line 'Realtime Enabled' $defender.RealTimeProtectionEnabled
+} catch {
+    Add-Line 'Defender Status' 'Unable to query'
+}
+
+# .NET Framework features and runtime
+$report.Add('----------------------------------------')
+$report.Add('.NET FRAMEWORK')
+
+foreach ($feature in @('NetFx3', 'NetFx4-AdvSrvs')) {
     try {
-        $imageHealth = [string](Repair-WindowsImage -Online -CheckHealth -ErrorAction Stop).ImageHealthState
-        if (-not $imageHealth) { $imageHealth = 'Unknown' }
-        $imageResult = if ($imageHealth -eq 'Healthy') { 'PASS' } else { 'FAIL' }
+        $state = (Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction Stop).State
+        Add-Line $feature $state
     } catch {
-        $imageHealth = 'Unable to check: ' + $_.Exception.Message
-        $imageResult = 'INFO'
+        Add-Line $feature 'Unable to query (try elevated PowerShell)'
+    }
+}
+
+try {
+    $net4 = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction Stop
+    Add-Line '.NET 4.x Version' $net4.Version
+} catch {
+    Add-Line '.NET 4.x Version' 'Not found'
+}
+
+# Microsoft Edge and PowerShell versions
+$report.Add('----------------------------------------')
+$report.Add('BROWSER AND POWERSHELL')
+
+$edgePaths = @(
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+)
+
+$edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+Add-Line 'Microsoft Edge' $(if ($edge) { (Get-Item $edge).VersionInfo.ProductVersion } else { 'Not found' })
+
+try {
+    $ps5 = & "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+    Add-Line 'Windows PowerShell' $ps5
+} catch {
+    Add-Line 'Windows PowerShell' 'Unable to query'
+}
+
+$pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+$pwshPath = if ($pwsh) { $pwsh.Source } else { "$env:ProgramFiles\PowerShell\7\pwsh.exe" }
+
+if (Test-Path $pwshPath) {
+    try {
+        $ps7 = & $pwshPath -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+        Add-Line 'PowerShell 7+' $ps7
+    } catch {
+        Add-Line 'PowerShell 7+' 'Unable to query'
     }
 } else {
-    $imageHealth = 'Skipped: run as Administrator to check'
-    $imageResult = 'INFO'
-}
-$checks += [pscustomobject]@{
-    Check = 'Component store'; Expected = 'Healthy'; Actual = $imageHealth; Result = $imageResult
+    Add-Line 'PowerShell 7+' 'Not installed'
 }
 
-$failed = @($checks | Where-Object Result -eq 'FAIL').Count
-$overall = if ($failed) { 'FAIL' } else { 'PASS' }
+# End of report
+$report.Add('========================================')
 
-# Generate HTML
-function H($value) { [System.Net.WebUtility]::HtmlEncode([string]$value) }
-
-$rows = foreach ($item in $checks) {
-    '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td class="{3}">{3}</td></tr>' -f `
-        (H $item.Check), (H $item.Expected), (H $item.Actual), $item.Result
-}
-
-$html = @"
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Monthly OS Image QA Report</title>
-<style>
-body { font: 14px 'Segoe UI',Arial,sans-serif; margin: 32px; color: #243141; }
-h1 { margin-bottom: 8px; }
-.summary { font-size: 18px; font-weight: bold; margin: 20px 0; }
-table { width: 100%; border-collapse: collapse; }
-th,td { border-bottom: 1px solid #dce2e8; padding: 10px; text-align: left; }
-th { background: #eef2f7; }
-.PASS { color: #187a43; font-weight: bold; }
-.FAIL { color: #b42318; font-weight: bold; }
-.INFO { color: #526477; font-weight: bold; }
-.note { color: #526477; font-size: 12px; margin-top: 24px; }
-</style>
-</head>
-<body>
-<h1>Monthly OS Image QA Report</h1>
-<p><b>Computer:</b> $(H $computer)<br>
-<b>Generated:</b> $(H (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))<br>
-<b>Last boot:</b> $(H $os.LastBootUpTime)</p>
-<div class="summary">Automated health checks: <span class="$overall">$overall</span></div>
-<table>
-<thead><tr><th>Check</th><th>Expected</th><th>Detected</th><th>Result</th></tr></thead>
-<tbody>$($rows -join "`n")</tbody>
-</table>
-<p class="note">The installed release/build and recent hotfixes are recorded, not certified against a monthly approved baseline. Task sequence success, actual WIM source and application/driver smoke tests must be verified separately.</p>
-</body>
-</html>
-"@
-
-Set-Content -Path $reportPath -Value $html -Encoding UTF8
-
-# Open report automatically
-Start-Process -FilePath $reportPath
-
-# Open ServiceNow if URL is configured
-if ($serviceNowUrl.Trim()) {
-    Start-Process -FilePath $serviceNowUrl
-}
+# Save and open report
+$report | Set-Content -Path $file -Encoding UTF8
+Start-Process notepad.exe -ArgumentList ('"{0}"' -f $file)
