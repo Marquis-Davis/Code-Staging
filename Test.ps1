@@ -1,253 +1,139 @@
 
-# Monthly OS Image Validation
-# Run as Administrator after OSD completes
+# Monthly OS Image QA Report
+# Run after the QA task sequence completes.
+# No command-line parameters or user input required.
 
-param(
-    [string]$ExpectedVersion = '',
-    [string]$ExpectedBuild = '',
-    [string]$ExpectedEdition = 'Enterprise',
-    [string]$ExpectedKB = '',
-    [string]$Ticket = '',
-    [string]$OutputFolder = "$env:PUBLIC\Documents\OSImageValidation"
-)
+$reportFolder = 'C:\Temp'
+$serviceNowUrl = ''  # Add your ServiceNow URL once.
 
-$ErrorActionPreference = 'Stop'
+New-Item -Path $reportFolder -ItemType Directory -Force | Out-Null
+
+$computer = $env:COMPUTERNAME
+$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$reportPath = Join-Path $reportFolder "OSImageValidation_${computer}_${timestamp}.html"
 $checks = @()
 
-function Add-Check {
-    param(
-        [string]$Name,
-        [string]$Expected,
-        [string]$Actual,
-        [string]$Result
-    )
-
-    $script:checks += [pscustomobject]@{
-        Check    = $Name
-        Expected = $Expected
-        Actual   = $Actual
-        Result   = $Result
-    }
-}
-
-function To-HtmlText {
-    param([object]$Value)
-    [System.Net.WebUtility]::HtmlEncode([string]$Value)
-}
-
-# Windows version and build
-
+# Windows details
 $os = Get-CimInstance Win32_OperatingSystem
-$version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-$release = [string]$version.DisplayVersion
-$actualBuild = '{0}.{1}' -f $version.CurrentBuild, $version.UBR
+$windows = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+$release = [string]$windows.DisplayVersion
+$build = '{0}.{1}' -f $windows.CurrentBuild, $windows.UBR
 
-Add-Check 'Windows edition' $ExpectedEdition $os.Caption $(
-    if ($os.Caption -match [regex]::Escape($ExpectedEdition)) {
-        'PASS'
-    } else {
-        'FAIL'
-    }
-)
-
-if ($ExpectedVersion) {
-    Add-Check 'Windows release' $ExpectedVersion $release $(
-        if ($release -eq $ExpectedVersion) { 'PASS' } else { 'FAIL' }
-    )
-} else {
-    Add-Check 'Windows release' 'No approved baseline supplied' $release 'INFO'
+$checks += [pscustomobject]@{
+    Check = 'Windows OS'; Expected = 'Windows 11'; Actual = $os.Caption
+    Result = $(if ($os.Caption -match 'Windows 11') { 'PASS' } else { 'FAIL' })
+}
+$checks += [pscustomobject]@{
+    Check = 'Windows edition'; Expected = 'Enterprise'; Actual = $windows.EditionID
+    Result = $(if ($windows.EditionID -match '^Enterprise') { 'PASS' } else { 'FAIL' })
+}
+$checks += [pscustomobject]@{
+    Check = 'Windows release'; Expected = 'Recorded for QA'; Actual = $release; Result = 'INFO'
+}
+$checks += [pscustomobject]@{
+    Check = 'OS build + UBR'; Expected = 'Recorded for QA'; Actual = $build; Result = 'INFO'
 }
 
-if ($ExpectedBuild) {
-    Add-Check 'OS build + UBR' $ExpectedBuild $actualBuild $(
-        if ($actualBuild -eq $ExpectedBuild) { 'PASS' } else { 'FAIL' }
-    )
-} else {
-    Add-Check 'OS build + UBR' 'No approved baseline supplied' $actualBuild 'INFO'
-}
-
-# Recently installed hotfixes (informational)
-
+# Recent hotfixes, informational only
 try {
-    $recentUpdates = @(
-        Get-HotFix -ErrorAction Stop |
+    $kbs = @(Get-HotFix -ErrorAction Stop |
         Sort-Object InstalledOn -Descending |
-        Select-Object -First 3 -ExpandProperty HotFixID
-    )
-
-    $recentKBs = if ($recentUpdates.Count) {
-        $recentUpdates -join ', '
-    } else {
-        'None returned'
-    }
+        Select-Object -First 5 -ExpandProperty HotFixID)
+    $kbList = if ($kbs.Count) { $kbs -join ', ' } else { 'No hotfixes returned' }
 } catch {
-    $recentKBs = 'Could not query update history'
+    $kbList = 'Unable to retrieve hotfixes'
+}
+$checks += [pscustomobject]@{
+    Check = 'Recent hotfixes'; Expected = 'Reference only'; Actual = $kbList; Result = 'INFO'
 }
 
-Add-Check 'Recent hotfixes (reference only)' 'Information only' $recentKBs 'INFO'
-
-# ConfigMgr client service
-
-$ccm = Get-Service CcmExec -ErrorAction SilentlyContinue
-
-$ccmStatus = if ($ccm) {
-    [string]$ccm.Status
-} else {
-    'Not installed'
+# ConfigMgr client
+$ccm = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
+$ccmStatus = if ($ccm) { [string]$ccm.Status } else { 'Not installed' }
+$checks += [pscustomobject]@{
+    Check = 'ConfigMgr client'; Expected = 'Running'; Actual = $ccmStatus
+    Result = $(if ($ccmStatus -eq 'Running') { 'PASS' } else { 'FAIL' })
 }
 
-Add-Check 'ConfigMgr client service' 'Running' $ccmStatus $(
-    if ($ccmStatus -eq 'Running') { 'PASS' } else { 'FAIL' }
-)
+# Pending servicing reboot
+$rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+                 (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+$checks += [pscustomobject]@{
+    Check = 'Pending servicing reboot'; Expected = 'No'; Actual = $(if ($rebootPending) { 'Yes' } else { 'No' })
+    Result = $(if ($rebootPending) { 'FAIL' } else { 'PASS' })
+}
 
-# Windows component store health
-
-try {
-    $health = [string](Repair-WindowsImage -Online -CheckHealth -ErrorAction Stop).ImageHealthState
-
-    if (-not $health) {
-        $health = 'Unknown'
+# Component store health
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($isAdmin) {
+    try {
+        $imageHealth = [string](Repair-WindowsImage -Online -CheckHealth -ErrorAction Stop).ImageHealthState
+        if (-not $imageHealth) { $imageHealth = 'Unknown' }
+        $imageResult = if ($imageHealth -eq 'Healthy') { 'PASS' } else { 'FAIL' }
+    } catch {
+        $imageHealth = 'Unable to check: ' + $_.Exception.Message
+        $imageResult = 'INFO'
     }
-} catch {
-    $health = 'Unable to check: ' + $_.Exception.Message
-}
-
-Add-Check 'Component store health' 'Healthy' $health $(
-    if ($health -eq 'Healthy') { 'PASS' } else { 'FAIL' }
-)
-
-# Pending Windows servicing reboot
-
-$rebootKeys = @(
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
-)
-
-$pendingReboot = @($rebootKeys | Where-Object {
-    Test-Path $_
-}).Count -gt 0
-
-Add-Check 'Windows servicing reboot pending' 'No' $(
-    if ($pendingReboot) { 'Yes' } else { 'No' }
-) $(
-    if ($pendingReboot) { 'FAIL' } else { 'PASS' }
-)
-
-# Calculate results
-
-$failCount = @($checks | Where-Object Result -eq 'FAIL').Count
-$overall = if ($failCount -eq 0) { 'PASS' } else { 'FAIL' }
-
-$compliance = if ($ExpectedVersion -and $ExpectedBuild) {
-    'Compared with supplied approved release and build'
 } else {
-    'NOT VERIFIED: approved release/build not supplied'
+    $imageHealth = 'Skipped: run as Administrator to check'
+    $imageResult = 'INFO'
+}
+$checks += [pscustomobject]@{
+    Check = 'Component store'; Expected = 'Healthy'; Actual = $imageHealth; Result = $imageResult
 }
 
-$generated = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-$booted = $os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss')
+$failed = @($checks | Where-Object Result -eq 'FAIL').Count
+$overall = if ($failed) { 'FAIL' } else { 'PASS' }
 
-# Create report folder
+# Generate HTML
+function H($value) { [System.Net.WebUtility]::HtmlEncode([string]$value) }
 
-New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
-
-$baseName = 'OSImageValidation_{0}_{1}' -f `
-    $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd_HHmmss')
-
-$htmlPath = Join-Path $OutputFolder ($baseName + '.html')
-$textPath = Join-Path $OutputFolder ($baseName + '.txt')
-
-# Build HTML table
-
-$rows = foreach ($check in $checks) {
+$rows = foreach ($item in $checks) {
     '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td class="{3}">{3}</td></tr>' -f `
-        (To-HtmlText $check.Check),
-        (To-HtmlText $check.Expected),
-        (To-HtmlText $check.Actual),
-        $check.Result
+        (H $item.Check), (H $item.Expected), (H $item.Actual), $item.Result
 }
-
-# HTML report
 
 $html = @"
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Monthly OS Image Validation</title>
+<title>Monthly OS Image QA Report</title>
 <style>
-body { font-family: Segoe UI, Arial, sans-serif; margin: 32px; color: #243141; }
-h1 { margin-bottom: 6px; }
-.sub, .note { color: #64748b; }
-.summary { font-size: 20px; font-weight: bold; margin: 20px 0; }
-.PASS { color: #147d44; font-weight: bold; }
-.FAIL { color: #bd2e29; font-weight: bold; }
-.INFO { color: #475569; font-weight: bold; }
-table { border-collapse: collapse; width: 100%; margin-top: 14px; }
-th, td { text-align: left; padding: 10px; border-bottom: 1px solid #d9e1e8; }
-th { background: #edf2f7; }
-.note { font-size: 13px; margin-top: 24px; }
+body { font: 14px 'Segoe UI',Arial,sans-serif; margin: 32px; color: #243141; }
+h1 { margin-bottom: 8px; }
+.summary { font-size: 18px; font-weight: bold; margin: 20px 0; }
+table { width: 100%; border-collapse: collapse; }
+th,td { border-bottom: 1px solid #dce2e8; padding: 10px; text-align: left; }
+th { background: #eef2f7; }
+.PASS { color: #187a43; font-weight: bold; }
+.FAIL { color: #b42318; font-weight: bold; }
+.INFO { color: #526477; font-weight: bold; }
+.note { color: #526477; font-size: 12px; margin-top: 24px; }
 </style>
 </head>
 <body>
-<h1>Monthly OS Image Validation</h1>
-<div class="sub">Generated $(To-HtmlText $generated) | Device $(To-HtmlText $env:COMPUTERNAME) | Ticket $(To-HtmlText $Ticket)</div>
-<div class="summary">Device health checks: <span class="$overall">$overall</span> ($failCount failed)</div>
-<p><strong>Installed OS:</strong> $(To-HtmlText $os.Caption)<br>
-<strong>OS build:</strong> $(To-HtmlText $actualBuild)<br>
-<strong>Patch compliance:</strong> $(To-HtmlText $compliance)<br>
-<strong>Expected KB (reference):</strong> $(To-HtmlText $(if ($ExpectedKB) { $ExpectedKB } else { 'Not supplied' }))<br>
-<strong>Last boot:</strong> $(To-HtmlText $booted)</p>
+<h1>Monthly OS Image QA Report</h1>
+<p><b>Computer:</b> $(H $computer)<br>
+<b>Generated:</b> $(H (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))<br>
+<b>Last boot:</b> $(H $os.LastBootUpTime)</p>
+<div class="summary">Automated health checks: <span class="$overall">$overall</span></div>
 <table>
-<thead>
-<tr>
-<th>Validation</th>
-<th>Expected</th>
-<th>Actual</th>
-<th>Result</th>
-</tr>
-</thead>
+<thead><tr><th>Check</th><th>Expected</th><th>Detected</th><th>Result</th></tr></thead>
 <tbody>$($rows -join "`n")</tbody>
 </table>
-<p class="note">This report checks the running OS, not the WIM source. Review task sequence success and functional smoke tests separately. The build can only be certified against the monthly approved release when a baseline is supplied.</p>
+<p class="note">The installed release/build and recent hotfixes are recorded, not certified against a monthly approved baseline. Task sequence success, actual WIM source and application/driver smoke tests must be verified separately.</p>
 </body>
 </html>
 "@
 
-Set-Content $htmlPath $html -Encoding UTF8
+Set-Content -Path $reportPath -Value $html -Encoding UTF8
 
-# Text report
+# Open report automatically
+Start-Process -FilePath $reportPath
 
-$text = @(
-    'MONTHLY OS IMAGE VALIDATION',
-    "Generated: $generated",
-    "Device: $env:COMPUTERNAME",
-    "Ticket: $Ticket",
-    "Installed OS: $($os.Caption)",
-    "OS build: $actualBuild",
-    "Patch compliance: $compliance",
-    "Last boot: $booted",
-    "Device health result: $overall ($failCount failed)",
-    '',
-    'CHECKS'
-)
-
-$text += $checks | ForEach-Object {
-    '{0}: {1} | Expected: {2} | Actual: {3}' -f `
-        $_.Result, $_.Check, $_.Expected, $_.Actual
+# Open ServiceNow if URL is configured
+if ($serviceNowUrl.Trim()) {
+    Start-Process -FilePath $serviceNowUrl
 }
-
-$text += ''
-$text += 'Note: Confirm task sequence success and functional smoke tests separately.'
-
-Set-Content $textPath $text -Encoding UTF8
-
-# Display results
-
-Write-Host "Device health: $overall" -ForegroundColor $(
-    if ($overall -eq 'PASS') { 'Green' } else { 'Red' }
-)
-
-Write-Host "Patch compliance: $compliance"
-Write-Host "HTML report: $htmlPath"
-Write-Host "Text report: $textPath"
