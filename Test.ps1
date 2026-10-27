@@ -1,15 +1,22 @@
-$nic = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
-    Where-Object { $_.OperationalStatus -eq 'Up' -and $_.GetIPProperties().DnsSuffix } |
-    Select-Object -First 1
+$dnsServers = [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+    Where-Object OperationalStatus -eq 'Up' |
+    ForEach-Object { $_.GetIPProperties().DnsAddresses } |
+    Where-Object { $_.AddressFamily -eq 'InterNetwork' } |
+    ForEach-Object { $_.ToString() } |
+    Select-Object -Unique
 
-$domain = $nic.GetIPProperties().DnsSuffix
+foreach ($server in $dnsServers) {
+    try {
+        $root = [ADSI]"LDAP://$server/RootDSE"
+        $time = $root.Properties['currentTime'].Value
 
-Write-Host "Detected DNS suffix: $domain"
-
-if ($domain -and (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)) {
-    Resolve-DnsName "_ldap._tcp.dc._msdcs.$domain" -Type SRV -DnsOnly -QuickTimeout |
-        Select-Object NameTarget, Priority
-}
-else {
-    Write-Host 'DNS suffix or DNS lookup command unavailable.'
+        if ($time) {
+            Write-Host "DC Found: $server"
+            Write-Host "Trusted UTC Time: $time"
+            break
+        }
+    }
+    catch {
+        Write-Host "No DC time from $server"
+    }
 }
