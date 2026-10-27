@@ -1,11 +1,8 @@
-if ([string]::IsNullOrWhiteSpace($textboxUsername.Text) -or
-    [string]::IsNullOrWhiteSpace($textboxPassword.Text)) {
+$script:AuthCredential = $null
 
-    [System.Windows.Forms.MessageBox]::Show(
-        "Please enter both a username and password.",
-        "Authentication Required",
-        "OK",
-        "Warning"
-    )
+if ((Show-OSD-Authentication_psf) -ne 'OK') {
     return
 }
+
+$creds = $script:AuthCredential
+$script:AuthCredential = $null
