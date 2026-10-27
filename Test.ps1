@@ -1,30 +1,12 @@
-$script:isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
-
-if ($script:isWinPE) {
-    $buttonCancel.Text = 'Cancel && Restart'
-}
-else {
-    $buttonCancel.Text = 'Cancel && Exit'
-}
-
-
-$buttonCancel_Click = {
+$formAuthentication_Load = {
+    $script:isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
 
     if ($script:isWinPE) {
-
-        $result = [System.Windows.Forms.MessageBox]::Show(
-            "Cancel authentication and restart this computer?",
-            "Confirm Restart",
-            "YesNo",
-            "Warning"
-        )
-
-        if ($result -eq 'Yes') {
-            wpeutil.exe Reboot
-        }
+        $buttonCancelRestart.Text = 'Cancel && Restart'
+        $tooltipCancel.SetToolTip($buttonCancelRestart, 'Cancel authentication and restart this computer.')
     }
     else {
-        $formAuthentication.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-        $formAuthentication.Close()
+        $buttonCancelRestart.Text = 'Cancel && Exit'
+        $tooltipCancel.SetToolTip($buttonCancelRestart, 'Cancel authentication and close this window.')
     }
 }
