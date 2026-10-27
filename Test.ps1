@@ -1,12 +1,15 @@
-$ip = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
-    Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' } |
-    ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
-    Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.Address.ToString() -notlike '169.254.*' } |
+$nic = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+    Where-Object { $_.OperationalStatus -eq 'Up' -and $_.GetIPProperties().DnsSuffix } |
     Select-Object -First 1
 
-if ($ip) {
-    $labelIPAddress.Text = "IP: $($ip.Address)"
+$domain = $nic.GetIPProperties().DnsSuffix
+
+Write-Host "Detected DNS suffix: $domain"
+
+if ($domain -and (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)) {
+    Resolve-DnsName "_ldap._tcp.dc._msdcs.$domain" -Type SRV -DnsOnly -QuickTimeout |
+        Select-Object NameTarget, Priority
 }
 else {
-    $labelIPAddress.Text = "IP: Not assigned"
+    Write-Host 'DNS suffix or DNS lookup command unavailable.'
 }
