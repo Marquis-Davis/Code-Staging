@@ -1,24 +1,30 @@
-$buttonAuthenticate_Click = {
+$script:isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
 
-    if ([string]::IsNullOrWhiteSpace($textboxUsername.Text) -or
-        [string]::IsNullOrWhiteSpace($textboxPassword.Text)) {
+if ($script:isWinPE) {
+    $buttonCancel.Text = 'Cancel && Restart'
+}
+else {
+    $buttonCancel.Text = 'Cancel && Exit'
+}
 
-        [System.Windows.Forms.MessageBox]::Show(
-            "Please enter both a username and password.",
-            "Authentication Required",
-            "OK",
+
+$buttonCancel_Click = {
+
+    if ($script:isWinPE) {
+
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "Cancel authentication and restart this computer?",
+            "Confirm Restart",
+            "YesNo",
             "Warning"
         )
 
-        if ([string]::IsNullOrWhiteSpace($textboxUsername.Text)) {
-            $textboxUsername.Focus()
+        if ($result -eq 'Yes') {
+            wpeutil.exe Reboot
         }
-        else {
-            $textboxPassword.Focus()
-        }
-
-        return
     }
-
-    # Existing AD authentication logic goes here
+    else {
+        $formAuthentication.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $formAuthentication.Close()
+    }
 }
