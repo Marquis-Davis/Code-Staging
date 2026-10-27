@@ -1,9 +1,11 @@
-l$securePassword = ConvertTo-SecureString $textboxPassword.Text -AsPlainText -Force
+if ([string]::IsNullOrWhiteSpace($textboxUsername.Text) -or
+    [string]::IsNullOrWhiteSpace($textboxPassword.Text)) {
 
-$script:AuthCredential = [PSCredential]::new(
-    $textboxUsername.Text.Trim(),
-    $securePassword
-)
-
-$formAuthentication.DialogResult = [System.Windows.Forms.DialogResult]::OK
-$formAuthentication.Close()
+    [System.Windows.Forms.MessageBox]::Show(
+        "Please enter both a username and password.",
+        "Authentication Required",
+        "OK",
+        "Warning"
+    )
+    return
+}
