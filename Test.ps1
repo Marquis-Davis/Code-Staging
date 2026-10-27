@@ -1,12 +1,9 @@
-$formAuthentication_Load = {
-    $script:isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
+l$securePassword = ConvertTo-SecureString $textboxPassword.Text -AsPlainText -Force
 
-    if ($script:isWinPE) {
-        $buttonCancelRestart.Text = 'Cancel && Restart'
-        $tooltipCancel.SetToolTip($buttonCancelRestart, 'Cancel authentication and restart this computer.')
-    }
-    else {
-        $buttonCancelRestart.Text = 'Cancel && Exit'
-        $tooltipCancel.SetToolTip($buttonCancelRestart, 'Cancel authentication and close this window.')
-    }
-}
+$script:AuthCredential = [PSCredential]::new(
+    $textboxUsername.Text.Trim(),
+    $securePassword
+)
+
+$formAuthentication.DialogResult = [System.Windows.Forms.DialogResult]::OK
+$formAuthentication.Close()
