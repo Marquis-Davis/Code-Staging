@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://the2xledger.com/sitemap.xml
