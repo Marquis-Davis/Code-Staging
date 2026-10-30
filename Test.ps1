@@ -1,138 +1,92 @@
 
-# OSD Live Log Streamer
-# PowerShell 5.1 / WinPE
+# OSD Live Log Collector
 
-$ShareRoot = "\\fileserver.example.com\OSDLogs"
-$PollMilliseconds = 200
+# Configuration
+$Share = "\\fileserver.example.com\OSDLogs"
 
+# Folders to monitor - add or remove paths
 $LogPaths = @(
-    "X:\Windows\Temp\SMSTSLog",
-    "X:\SMSTSLog",
     "X:\Windows\Temp",
-    "C:\_SMSTaskSequence\Logs",
-    "C:\Windows\CCM\Logs",
-    "C:\ProgramData\OSDFrontend\Logs"
+    "X:\SMSTSLog",
+    "C:\Windows\CCM\Logs"
 )
 
-$LogNames = @(
-    "smsts.log",
-    "OSDFrontEnd.log",
-    "OSD-Email.log",
-    "OSDMonitor.log"
-)
-
-# Identify device
-$Serial = (Get-WmiObject Win32_BIOS).SerialNumber
-$Serial = $Serial -replace '[\\/:*?"<>|]', '_'
-
-if ([string]::IsNullOrWhiteSpace($Serial)) {
-    $Serial = $env:COMPUTERNAME
-}
-
-$Session = Get-Date -Format "yyyyMMdd_HHmmss"
+$Interval = 1
 
 # Authenticate once
-$Credential = Get-Credential -Message "Enter credentials for OSD log share"
+$Credential = Get-Credential -Message "Enter network share credentials"
 
 try {
-    New-PSDrive -Name OSDLogs `
+    New-PSDrive -Name OSD `
         -PSProvider FileSystem `
-        -Root $ShareRoot `
+        -Root $Share `
         -Credential $Credential `
         -ErrorAction Stop | Out-Null
-
-    $Destination = "OSDLogs:\$Serial\$Session"
-
-    New-Item -ItemType Directory -Path $Destination -Force -ErrorAction Stop | Out-Null
-
-    Write-Host "Connected to share: $Destination" -ForegroundColor Green
 }
 catch {
-    Write-Host "Share connection failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Share connection failed: $($_.Exception.Message)"
     return
 }
 
-# Track file offsets independently
-$Offsets = @{}
+# Create machine folder
+$Serial = (Get-WmiObject Win32_BIOS).SerialNumber -replace '[\\/:*?"<>|]', '_'
+$Destination = "OSD:\$Serial"
 
-Write-Host "Streaming OSD logs every $PollMilliseconds ms..."
+New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+
+Write-Host "Collecting logs to $Destination"
 Write-Host "Press Ctrl+C to stop."
 
+# Continuously copy logs
 while ($true) {
+
     foreach ($Path in $LogPaths) {
+
         if (-not (Test-Path -LiteralPath $Path)) {
             continue
         }
 
-        foreach ($Name in $LogNames) {
-            $Source = Join-Path $Path $Name
+        Get-ChildItem -LiteralPath $Path -Filter "*.log" -File -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object {
 
-            if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-                continue
-            }
+            $Source = $_.FullName
+
+            # Preserve source folder structure
+            $Relative = $Source.Substring($Path.TrimEnd('\').Length).TrimStart('\')
+            $Folder = ($Path -replace '[:\\]', '_').Trim('_')
+
+            $Target = Join-Path $Destination (Join-Path $Folder $Relative)
+            $TargetFolder = Split-Path $Target -Parent
 
             try {
-                $FolderName = $Path -replace '[:\\]', '_'
-                $TargetFolder = Join-Path $Destination $FolderName
+                New-Item -Path $TargetFolder -ItemType Directory -Force -ErrorAction Stop | Out-Null
 
-                if (-not (Test-Path -LiteralPath $TargetFolder)) {
-                    New-Item -ItemType Directory -Path $TargetFolder -Force | Out-Null
-                }
-
-                $TargetFile = Join-Path $TargetFolder $Name
-
-                $InputStream = [System.IO.File]::Open(
-                    $Source,
-                    [System.IO.FileMode]::Open,
-                    [System.IO.FileAccess]::Read,
-                    [System.IO.FileShare]::ReadWrite
+                # Read active log without locking it
+                $InputFile = [IO.File]::Open(
+                    $Source, 'Open', 'Read', 'ReadWrite'
                 )
 
                 try {
-                    if (-not $Offsets.ContainsKey($Source)) {
-                        $Offsets[$Source] = 0L
+                    $OutputFile = [IO.File]::Open(
+                        $Target, 'Create', 'Write', 'None'
+                    )
+
+                    try {
+                        $InputFile.CopyTo($OutputFile)
                     }
-
-                    $Offset = [long]$Offsets[$Source]
-
-                    if ($InputStream.Length -lt $Offset) {
-                        $Offset = 0L
-                    }
-
-                    if ($InputStream.Length -gt $Offset) {
-                        $InputStream.Seek($Offset, [System.IO.SeekOrigin]::Begin) | Out-Null
-
-                        $OutputStream = [System.IO.File]::Open(
-                            $TargetFile,
-                            [System.IO.FileMode]::Append,
-                            [System.IO.FileAccess]::Write,
-                            [System.IO.FileShare]::Read
-                        )
-
-                        try {
-                            $Buffer = New-Object byte[] 65536
-
-                            while (($BytesRead = $InputStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
-                                $OutputStream.Write($Buffer, 0, $BytesRead)
-                            }
-
-                            $OutputStream.Flush()
-                            $Offsets[$Source] = $InputStream.Position
-                        }
-                        finally {
-                            $OutputStream.Dispose()
-                        }
+                    finally {
+                        $OutputFile.Dispose()
                     }
                 }
                 finally {
-                    $InputStream.Dispose()
+                    $InputFile.Dispose()
                 }
             }
             catch {
-                Write-Host "Stream failed: $Source - $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "FAILED: $Source - $($_.Exception.Message)"
             }
         }
     }
 
-    Start-Sleep -Milliseconds $PollMilliseconds
+    Start-Sleep -Seconds $Interval
 }
