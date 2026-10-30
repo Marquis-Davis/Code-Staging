@@ -1,16 +1,5 @@
-$Credential = Get-Credential -Message "Enter share credentials"
+$Serial = (Get-CimInstance Win32_BIOS).SerialNumber.Trim()
+$Serial = $Serial -replace '[^a-zA-Z0-9]', ''
 
-if (Get-PSDrive Z -ErrorAction SilentlyContinue) {
-    Remove-PSDrive Z -Force
-}
-
-New-PSDrive -Name Z `
-    -PSProvider FileSystem `
-    -Root $Share `
-    -Credential $Credential `
-    -Scope Global `
-    -ErrorAction Stop | Out-Null
-
-if (-not (Test-Path "Z:\")) {
-    throw "Cannot access network share."
-}
+$ComputerName = "WK$Serial"
+$Destination = "Z:\$ComputerName"
