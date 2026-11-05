@@ -1,5 +1,7 @@
-$Serial = (Get-CimInstance Win32_BIOS).SerialNumber.Trim()
-$Serial = $Serial -replace '[^a-zA-Z0-9]', ''
+$now = [DateTime]::UtcNow
 
-$ComputerName = "WK$Serial"
-$Destination = "Z:\$ComputerName"
+$policy = @{
+    UpdatedUTC     = $now.ToString('o')
+    LastUpdated    = $now.ToString('MM/dd/yyyy hh:mm tt') + ' UTC'
+    Boundaries     = @($boundaries)
+}
