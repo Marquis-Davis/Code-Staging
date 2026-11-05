@@ -16,29 +16,26 @@ try {
 
     if ([version]$Package.Version -lt [version]$NewVersion) {
 
-        Write-Log "Updating ConfigMgr package version to $NewVersion..."
+        Write-Log "New Defender version detected. Updating package..."
 
         Set-CMPackage -Id $PackageId `
             -Version $NewVersion.ToString() `
             -ErrorAction Stop
 
-        Write-Log "ConfigMgr package version updated."
+        Write-Log "ConfigMgr package version updated to $NewVersion."
+
+        # Refresh content on existing DPs
+        Write-Log "Updating Defender Platform content on distribution points..."
+
+        Update-CMDistributionPoint `
+            -PackageId $PackageId `
+            -ErrorAction Stop
+
+        Write-Log "Distribution point update triggered successfully."
     }
     else {
-        Write-Log "ConfigMgr package version is already current."
+        Write-Log "No newer Defender version. Skipping package update and redistribution."
     }
-
-    # ------------------------------------------------------------
-    # Refresh content on existing DPs
-    # ------------------------------------------------------------
-
-    Write-Log "Updating Defender Platform content on distribution points..."
-
-    Update-CMDistributionPoint `
-        -PackageId $PackageId `
-        -ErrorAction Stop
-
-    Write-Log "ConfigMgr distribution point update triggered successfully."
 }
 catch {
     Write-Log "ERROR: ConfigMgr package update failed."
