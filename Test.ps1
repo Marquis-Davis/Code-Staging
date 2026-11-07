@@ -1,34 +1,20 @@
 
-function Write-OSDAuthLog {
-    param([string]$Message)
+# Check IP every 5 seconds
+if (-not $script:NextIPCheck -or (Get-Date) -ge $script:NextIPCheck) {
 
-    try {
-        if (-not $script:AuthLog) {
+    $script:NextIPCheck = (Get-Date).AddSeconds(5)
 
-            $folder = if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') {
-                'X:\Windows\Temp\SMSTSLog'
-            }
-            else {
-                "$env:SystemDrive\Temp\SMSTSLog"
-            }
+    $ip = [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+        Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' } |
+        ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
+        Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.Address.ToString() -notlike '169.254.*' } |
+        Select-Object -First 1
 
-            New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    $newIP = if ($ip) { $ip.Address.ToString() } else { 'Not assigned' }
+    $oldIP = $labelIPAddress.Text -replace '^IP:\s*', ''
 
-            $ip = if ($labelIPAddress.Text -match '^IP:\s*(\d{1,3}(?:\.\d{1,3}){3})$') {
-                $matches[1]
-            }
-            else {
-                "NoIP-$env:COMPUTERNAME-$(Get-Date -Format 'yyyyMMddHHmmss')"
-            }
-
-            $script:AuthLog = Join-Path $folder "${ip}-OSDAuthentication.log"
-        }
-
-        Add-Content -LiteralPath $script:AuthLog `
-            -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $Message" `
-            -ErrorAction Stop
-    }
-    catch {
-        Write-Warning "Authentication logging failed: $($_.Exception.Message)"
+    if ($oldIP -ne $newIP) {
+        Write-OSDAuthLog "IP changed: $oldIP -> $newIP"
+        $labelIPAddress.Text = "IP: $newIP"
     }
 }
