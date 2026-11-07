@@ -1,40 +1,34 @@
-# Validate credentials before closing the form
-$context = $null
 
-try {
-    Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+function Write-OSDAuthLog {
+    param([string]$Message)
 
-    $context = [System.DirectoryServices.AccountManagement.PrincipalContext]::new(
-        [System.DirectoryServices.AccountManagement.ContextType]::Domain,
-        $global:Domain
-    )
+    try {
+        if (-not $script:AuthLog) {
 
-    $valid = $context.ValidateCredentials(
-        $textboxUsername.Text.Trim(),
-        $textboxPassword.Text
-    )
+            $folder = if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') {
+                'X:\Windows\Temp\SMSTSLog'
+            }
+            else {
+                "$env:SystemDrive\Temp\SMSTSLog"
+            }
 
-    if (-not $valid) {
-        [void][System.Windows.Forms.MessageBox]::Show(
-            'Authentication failed. Please retry.',
-            'Authentication',
-            'OK',
-            'Warning'
-        )
-        return
+            New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop | Out-Null
+
+            $ip = if ($labelIPAddress.Text -match '^IP:\s*(\d{1,3}(?:\.\d{1,3}){3})$') {
+                $matches[1]
+            }
+            else {
+                "NoIP-$env:COMPUTERNAME-$(Get-Date -Format 'yyyyMMddHHmmss')"
+            }
+
+            $script:AuthLog = Join-Path $folder "${ip}-OSDAuthentication.log"
+        }
+
+        Add-Content -LiteralPath $script:AuthLog `
+            -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $Message" `
+            -ErrorAction Stop
     }
-}
-catch {
-    [void][System.Windows.Forms.MessageBox]::Show(
-        'Unable to contact or validate against the domain. Please retry.',
-        'Authentication',
-        'OK',
-        'Warning'
-    )
-    return
-}
-finally {
-    if ($context) {
-        $context.Dispose()
+    catch {
+        Write-Warning "Authentication logging failed: $($_.Exception.Message)"
     }
 }
