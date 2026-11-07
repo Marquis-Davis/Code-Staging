@@ -1,4 +1,5 @@
-trap {
-    Write-Output $_.InvocationInfo.PositionMessage
-    throw
+'Pending' {
+    $labelBuildStatus.Text = 'Sign in to check'
+    $labelBuildStatus.ForeColor = [Drawing.Color]::DimGray
 }
+
