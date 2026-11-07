@@ -1,20 +1,65 @@
 
-# Check IP every 5 seconds
-if (-not $script:NextIPCheck -or (Get-Date) -ge $script:NextIPCheck) {
+function Convert-IPv4ToNumber {
+    param([string]$Address)
 
-    $script:NextIPCheck = (Get-Date).AddSeconds(5)
+    $b = [Net.IPAddress]::Parse($Address).GetAddressBytes()
+    if ($b.Length -ne 4) { throw "Invalid IPv4 address" }
 
-    $ip = [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
-        Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' } |
-        ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
-        Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.Address.ToString() -notlike '169.254.*' } |
-        Select-Object -First 1
+    return ([long]$b[0] * 16777216) +
+           ([long]$b[1] * 65536) +
+           ([long]$b[2] * 256) +
+           [long]$b[3]
+}
 
-    $newIP = if ($ip) { $ip.Address.ToString() } else { 'Not assigned' }
-    $oldIP = $labelIPAddress.Text -replace '^IP:\s*', ''
+function Test-BuildSegment {
+    param(
+        [string]$IPAddress,
+        [string]$JsonPath
+    )
 
-    if ($oldIP -ne $newIP) {
-        Write-OSDAuthLog "IP changed: $oldIP -> $newIP"
-        $labelIPAddress.Text = "IP: $newIP"
+    try {
+        $json = Get-Content -LiteralPath $JsonPath -Raw -ErrorAction Stop |
+            ConvertFrom-Json -ErrorAction Stop
+
+        if (-not $json.Boundaries) {
+            throw "JSON contains no boundaries"
+        }
+
+        $device = Convert-IPv4ToNumber $IPAddress
+        $count = 0
+
+        foreach ($boundary in $json.Boundaries) {
+            if ($boundary.BoundaryType -ne 3) { continue }
+
+            $range = @($boundary.Value -split '\s*-\s*')
+            if ($range.Count -ne 2) { throw "Invalid IP range" }
+
+            $start = Convert-IPv4ToNumber $range[0]
+            $end = Convert-IPv4ToNumber $range[1]
+
+            if ($start -gt $end) { throw "Invalid range order" }
+
+            $count++
+
+            if ($device -ge $start -and $device -le $end) {
+                return [PSCustomObject]@{
+                    Status = 'Approved'
+                    Detail = $boundary.DisplayName
+                }
+            }
+        }
+
+        if ($count -eq 0) { throw "No valid build ranges found" }
+
+        return [PSCustomObject]@{
+            Status = 'Denied'
+            Detail = 'No matching build segment'
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Status = 'Unavailable'
+            Detail = $_.Exception.Message
+        }
     }
 }
