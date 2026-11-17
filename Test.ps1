@@ -1,15 +1,30 @@
-Registry('HKLM:\SOFTWARE\ExampleCompany\OSD')
-| where Property == 'ImageInstalled'
-| project Device, ImageInstalled = Value,
-    InstallYear = substring(Value, indexof(Value, ' ') - 4, 4)
-| where InstallYear > '2026'
-    or (InstallYear == '2026'
-        and (ImageInstalled startswith '11/'
-            or ImageInstalled startswith '12/'))
-| join kind=leftouter (
-    Registry('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion')
-    | where Property == 'DisplayVersion'
-    | project Device, WindowsVersion = Value
+lImport-Module ActiveDirectory
+
+$Accounts = @(
+    "svc-OSDWebService",
+    "svc-OSDDomainJoin"
 )
-| project Device, ImageInstalled, WindowsVersion
-| order by Device asc
+
+$Report = foreach ($Account in $Accounts) {
+
+    Get-ADUser -Identity $Account -Properties `
+        Description,
+        Enabled,
+        PasswordNeverExpires,
+        CannotChangePassword,
+        ServicePrincipalName,
+        MemberOf |
+    Select-Object Name,
+        SamAccountName,
+        Enabled,
+        Description,
+        PasswordNeverExpires,
+        CannotChangePassword,
+        ServicePrincipalName,
+        @{Name='Groups';Expression={
+            ($_.MemberOf | Get-ADGroup | Select-Object -ExpandProperty Name) -join '; '
+        }}
+}
+
+$Report | Format-List
+$Report | Export-Csv "$env:USERPROFILE\Desktop\OSD-Accounts.csv" -NoTypeInformation
