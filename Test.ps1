@@ -1,30 +1,16 @@
-lImport-Module ActiveDirectory
+Import-Module ActiveDirectory
 
-$Accounts = @(
-    "svc-OSDWebService",
-    "svc-OSDDomainJoin"
-)
+$Account = "svc-OSDDomainJoin"
+$OU = "OU=Workstations,DC=example,DC=com"
 
-$Report = foreach ($Account in $Accounts) {
-
-    Get-ADUser -Identity $Account -Properties `
-        Description,
-        Enabled,
-        PasswordNeverExpires,
-        CannotChangePassword,
-        ServicePrincipalName,
-        MemberOf |
-    Select-Object Name,
-        SamAccountName,
-        Enabled,
-        Description,
-        PasswordNeverExpires,
-        CannotChangePassword,
-        ServicePrincipalName,
-        @{Name='Groups';Expression={
-            ($_.MemberOf | Get-ADGroup | Select-Object -ExpandProperty Name) -join '; '
-        }}
-}
-
-$Report | Format-List
-$Report | Export-Csv "$env:USERPROFILE\Desktop\OSD-Accounts.csv" -NoTypeInformation
+(Get-Acl "AD:\$OU").Access |
+    Where-Object {
+        $_.IdentityReference -match [regex]::Escape($Account)
+    } |
+    Select-Object IdentityReference,
+        ActiveDirectoryRights,
+        AccessControlType,
+        ObjectType,
+        InheritanceType,
+        IsInherited |
+    Format-List
